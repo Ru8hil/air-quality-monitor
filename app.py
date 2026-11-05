@@ -6,7 +6,7 @@ from src import config
 from src.storage import StorageError, get_storage
 
 st.set_page_config(
-    page_title="Campus Air Quality Monitor",
+    page_title="Campus Air Quality Monitor - MIT Manipal",
     page_icon="🌿",
     layout="wide",
 )

@@ -17,7 +17,7 @@ try:
 except ImportError:
     st.caption("Install streamlit-autorefresh for automatic refresh.")
 
-st.title("🌿 Smart Campus Air Quality Monitor")
+st.title("🌿 Smart Campus Air Quality Monitor - MIT Manipal")
 st.caption(
     "Live IoT sensor readings | Indian National AQI (CPCB breakpoints, 5-minute rolling average) "
     f"| storage backend: {config.STORAGE_BACKEND} | raw archive: {config.ARCHIVE_BACKEND}"

@@ -1,0 +1,16 @@
+# Serve the dashboard on port 80 (plain http://<VM-IP>) as well as 8501, by
+# redirecting port-80 traffic to Streamlit. Port 80 is opened in the VM's
+# network security group when the VM is created ("HTTP (80)").
+[Unit]
+Description=Air quality platform - dashboard on port 80 (redirect to 8501)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports 8501 2>/dev/null || iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports 8501'
+ExecStop=/bin/sh -c 'iptables -t nat -D PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports 8501 || true'
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Demo / operations helper on the VM (installed to /usr/local/bin/airq).
+#   sudo airq status                 services + health check
+#   sudo airq traffic on|off         continuous simulated sensor readings
+#   sudo airq episode <kind>         one episode now: pollution_spike | co2_buildup | heatwave | sensor_fault
+#   sudo airq logs [consumer|dashboard|producer]   follow live logs (Ctrl+C to stop)
+#   sudo airq stats                  totals in PostgreSQL (readings, sensors, alerts by severity)
+#   sudo airq alerts [n]             the n most recent alerts (default 10)
+#   sudo airq blobs [n]              the n newest raw-reading files in Blob Storage (default 5)
+#   sudo airq inbox                  files waiting in incoming/ and quarantine/
+#   sudo airq rollback               go back to the previous release
+set -euo pipefail
+
+APP=/opt/airq/current
+as_app() {
+  systemd-run --quiet --wait --pipe --collect --uid=airq --gid=airq \
+    --property=EnvironmentFile=/etc/airq/airq.env \
+    --setenv=SERVICE_NAME=cli --setenv=LOG_LEVEL=ERROR \
+    --working-directory="$APP" "$APP/.venv/bin/python" "$@"
+}
+
+[[ $EUID -eq 0 ]] || { echo "run with sudo: sudo airq $*"; exit 1; }
+
+case "${1:-status}" in
+  status)
+    systemctl --no-pager --lines=0 status airq-consumer airq-dashboard airq-producer | grep -E "●|Active:" || true
+    as_app manage.py health
+    ;;
+  traffic)
+    case "${2:-}" in
+      on) systemctl start airq-producer && echo "Simulated sensors ON (6 sensors, an episode every ~90 s)" ;;
+      off) systemctl stop airq-producer && echo "Simulated sensors OFF" ;;
+      *) echo "usage: sudo airq traffic on|off"; exit 1 ;;
+    esac
+    ;;
+  episode)
+    [[ -n "${2:-}" ]] || { echo "usage: sudo airq episode pollution_spike|co2_buildup|heatwave|sensor_fault"; exit 1; }
+    as_app producer.py --episode "$2"
+    ;;
+  logs)
+    journalctl -u "airq-${2:-consumer}" -f -o cat
+    ;;
+  stats)
+    as_app -c 'import json; from src.storage import get_storage; s = get_storage(); print(json.dumps(s.stats(), indent=2)); s.close()'
+    ;;
+  alerts)
+    as_app -c "import pandas as pd; from src.storage import get_storage
+pd.set_option('display.width', 250); pd.set_option('display.max_colwidth', 50)
+s = get_storage(); a = s.load_alerts(${2:-10}); s.close()
+print(a[['processed_at', 'location', 'severity', 'alert_types', 'peak_aqi']].to_string(index=False) if len(a) else 'No alerts yet')"
+    ;;
+  blobs)
+    as_app -c "from src.cloud.blob_storage import get_archiver
+c = get_archiver().container
+blobs = sorted(c.list_blobs(), key=lambda b: b.last_modified, reverse=True)
+print(f'{len(blobs)} raw batch file(s) in container {c.container_name}; newest:')
+for b in blobs[:${2:-5}]: print(f'  {b.last_modified:%Y-%m-%d %H:%M:%S}  {b.size:>7} bytes  {b.name}')"
+    ;;
+  inbox)
+    echo "incoming:   $(find /var/lib/airq/incoming -name '*.json' | wc -l) file(s) waiting"
+    echo "quarantine: $(find /var/lib/airq/quarantine -name '*.json' | wc -l) file(s) rejected"
+    ;;
+  rollback)
+    bash "$APP/deploy/rollback.sh"
+    ;;
+  *)
+    sed -n '2,11p' "$0"
+    exit 1
+    ;;
+esac

@@ -1,0 +1,12 @@
+# Runtime dependencies (versions tested together).
+numpy==2.2.6
+pandas==2.3.3
+streamlit==1.66.0
+streamlit-autorefresh==1.0.1
+plotly==7.1.0
+python-dotenv==1.2.4
+# Azure Database for PostgreSQL
+psycopg[binary]==3.3.6
+psycopg-pool==3.3.3
+# Azure Blob Storage
+azure-storage-blob==12.31.0

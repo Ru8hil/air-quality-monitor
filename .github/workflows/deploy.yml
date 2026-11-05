@@ -1,0 +1,116 @@
+name: Deploy to Azure VM
+
+# Runs only after CI succeeds for a push to main (never for pull requests,
+# so untested code cannot deploy), or manually from the Actions tab.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      # Repository secrets (Settings > Secrets and variables > Actions).
+      VM_HOST: ${{ secrets.VM_HOST }}
+      VM_USERNAME: ${{ secrets.VM_USERNAME }}
+      SSHPASS: ${{ secrets.VM_PASSWORD }}
+
+    steps:
+      - name: Check that the Azure secrets exist
+        id: check
+        run: |
+          missing=()
+          for name in VM_HOST VM_USERNAME VM_PASSWORD PGHOST PGUSER PGPASSWORD AZURE_STORAGE_CONNECTION_STRING; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          if (( ${#missing[@]} )); then
+            echo "::warning::Deployment skipped: add these repository secrets first: ${missing[*]}"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          VM_PASSWORD: ${{ secrets.VM_PASSWORD }}
+          PGHOST: ${{ secrets.PGHOST }}
+          PGUSER: ${{ secrets.PGUSER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+
+      - name: Check out the tested commit
+        if: steps.check.outputs.ready == 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SHA }}
+
+      - name: Package the release and its configuration
+        if: steps.check.outputs.ready == 'true'
+        env:
+          PGHOST: ${{ secrets.PGHOST }}
+          PGUSER: ${{ secrets.PGUSER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+        run: |
+          set -euo pipefail
+          git archive --format=tar.gz -o release.tar.gz HEAD
+          umask 077
+          {
+            echo "APP_ENV=azure"
+            printf 'PGHOST=%s\n' "$PGHOST"
+            printf 'PGUSER=%s\n' "$PGUSER"
+            printf 'PGPASSWORD=%s\n' "$PGPASSWORD"
+            echo "PGDATABASE=airquality"
+            echo "PGSSLMODE=require"
+            printf 'AZURE_STORAGE_CONNECTION_STRING=%s\n' "$AZURE_STORAGE_CONNECTION_STRING"
+            echo "AZURE_STORAGE_CONTAINER=raw-readings"
+            echo "DATA_DIR=/var/lib/airq"
+            echo "LOG_FORMAT=json"
+          } > airq.env
+
+      - name: Copy to the VM and install (migrate, restart, health check)
+        if: steps.check.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq sshpass >/dev/null
+          ID="${SHA:0:12}-$(date -u +%Y%m%d%H%M%S)"
+          DIR="/tmp/airq-upload-$ID"
+          SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 -o ServerAliveInterval=30)
+          TARGET="$VM_USERNAME@$VM_HOST"
+
+          echo "Deploying $SHA to $VM_HOST as release $ID"
+          sshpass -e ssh "${SSH_OPTS[@]}" "$TARGET" "mkdir -p '$DIR'"
+          sshpass -e scp "${SSH_OPTS[@]}" release.tar.gz airq.env deploy/remote_install.sh "$TARGET:$DIR/"
+          # The VM password is sent on stdin for sudo, never on a command line.
+          printf '%s\n' "$SSHPASS" | sshpass -e ssh "${SSH_OPTS[@]}" "$TARGET" \
+            "sudo -S -p '' bash '$DIR/remote_install.sh' '$DIR' '$ID'" | tee deploy.log
+
+          # Success only if the VM-side health check passed.
+          grep -q '^DEPLOY_RESULT=SUCCESS' deploy.log || {
+            echo "::error::Deployment failed or the health check did not pass (see the output above; a rollback may have occurred)."
+            exit 1
+          }
+
+      - name: Summary
+        if: always() && steps.check.outputs.ready == 'true'
+        run: |
+          {
+            echo "### Deployment ${{ job.status }}"
+            echo "- Commit: \`${SHA}\`"
+            echo "- Dashboard: http://${VM_HOST}"
+          } >> "$GITHUB_STEP_SUMMARY"

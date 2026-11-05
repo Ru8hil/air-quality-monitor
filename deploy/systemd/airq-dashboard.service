@@ -1,0 +1,27 @@
+[Unit]
+Description=Air quality platform - Streamlit dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=airq
+Group=airq
+WorkingDirectory=/opt/airq/current
+EnvironmentFile=/etc/airq/airq.env
+Environment=SERVICE_NAME=dashboard
+Environment=HOME=/var/lib/airq
+ExecStart=/opt/airq/current/.venv/bin/streamlit run app.py \
+    --server.port 8501 --server.address 0.0.0.0 --server.headless true \
+    --browser.gatherUsageStats false
+Restart=always
+RestartSec=5
+SyslogIdentifier=airq-dashboard
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/airq
+
+[Install]
+WantedBy=multi-user.target

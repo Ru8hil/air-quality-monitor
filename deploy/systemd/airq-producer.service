@@ -1,0 +1,24 @@
+# Simulated IoT sensors (demo only). Not enabled by default: sudo airq traffic on
+[Unit]
+Description=Air quality platform - simulated IoT sensors (demo only)
+After=airq-consumer.service
+
+[Service]
+Type=simple
+User=airq
+Group=airq
+WorkingDirectory=/opt/airq/current
+EnvironmentFile=/etc/airq/airq.env
+Environment=SERVICE_NAME=producer
+ExecStart=/opt/airq/current/.venv/bin/python producer.py --interval 1.0 --episode-interval 90
+Restart=on-failure
+RestartSec=5
+SyslogIdentifier=airq-producer
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/airq
+
+[Install]
+WantedBy=multi-user.target
